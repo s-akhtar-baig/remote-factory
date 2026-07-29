@@ -59,6 +59,7 @@ __all__ = [
     "spec_update_workflow",
     "parallel_improve_workflow",
     "founder_workflow",
+    "simulate_workflow",
     "register_all",
 ]
 
@@ -2709,6 +2710,264 @@ def founder_workflow() -> Workflow:
     )
 
 
+def simulate_workflow() -> Workflow:
+    """W₁₄: Simulate Mode — ephemeral cluster provisioning for troubleshooting.
+
+    analyze_query → gate_analysis(user) → snapshot_cluster → gate_snapshot(fn) →
+    provision_cluster → gate_provision(fn) → apply_manifests → verify_cluster →
+    gate_verify(fn) → archivist(async)
+    """
+    nodes: dict[str, Any] = {}
+    edges: list[Edge] = []
+
+    nodes["analyze_query"] = AgentNode(
+        id="analyze_query",
+        role=AgentRole.STRATEGIST,
+        prompt_template=(
+            "Analyze the user's troubleshooting query to identify which Kubernetes "
+            "resources to snapshot from the target cluster.\n\n"
+            "Read the simulate task config from .factory/simulate/task.json for the "
+            "user's query text, target kubeconfig path, and any explicit namespace or "
+            "resource-type overrides.\n\n"
+            "If the user provided explicit --target-namespaces or --resource-types, "
+            "use those directly. Otherwise, analyze the query to extract:\n"
+            "- Relevant namespaces (max 10)\n"
+            "- Resource types to snapshot (deployments, services, configmaps, secrets, "
+            "  statefulsets, daemonsets, networkpolicies, ingresses, routes, etc.)\n"
+            "- Dependency hints (e.g., 'networking issue' → include NetworkPolicies, "
+            "  Services, Ingresses)\n\n"
+            "If the target kubeconfig is accessible, run "
+            "`kubectl --kubeconfig <path> get namespaces -o name` to list available "
+            "namespaces and cross-reference with the query.\n\n"
+            "Write the extraction result to .factory/simulate/analysis.json with this schema:\n"
+            "```json\n"
+            "{\n"
+            '  "query": "<original user query>",\n'
+            '  "namespaces": ["ns1", "ns2"],\n'
+            '  "resource_types": ["deployments", "services", "configmaps"],\n'
+            '  "cluster_type": "microshift|minikube",\n'
+            '  "max_replicas": 1,\n'
+            '  "rationale": "<why these namespaces/resources are relevant>"\n'
+            "}\n"
+            "```"
+        ),
+        writes={".factory/simulate/analysis.json"},
+        timeout=300,
+    )
+
+    nodes["gate_analysis"] = GateNode(
+        id="gate_analysis",
+        evaluator_type="user",
+        gate_prompt=(
+            "Review the extracted namespaces and resource types. "
+            "Present the analysis.json contents to the user. "
+            "Ask: 'These are the namespaces and resources I will snapshot. "
+            "Approve, or provide corrections.'"
+        ),
+        reads={".factory/simulate/analysis.json"},
+    )
+
+    nodes["snapshot_cluster"] = AgentNode(
+        id="snapshot_cluster",
+        role=AgentRole.BUILDER,
+        prompt_template=(
+            "Export and sanitize Kubernetes manifests from the target cluster.\n\n"
+            "Read .factory/simulate/analysis.json for the namespaces, resource types, "
+            "and cluster configuration.\n\n"
+            "For each namespace and resource type in the analysis:\n"
+            "1. Run `kubectl --kubeconfig <target_kubeconfig> get <resource_type> "
+            "   -n <namespace> -o yaml` to export manifests\n"
+            "2. Sanitize each manifest:\n"
+            "   - Strip metadata.uid, metadata.resourceVersion, metadata.creationTimestamp, "
+            "     metadata.managedFields, metadata.ownerReferences, status section\n"
+            "   - Scale down replicas to max_replicas (from analysis.json, default: 1)\n"
+            "   - Replace secret data values with 'REDACTED' placeholders\n"
+            "   - Convert PersistentVolumeClaim storageClassName to 'standard'\n"
+            "   - Minimize resource requests/limits (cpu: 100m, memory: 128Mi)\n"
+            "3. Save each manifest to .factory/simulate/manifests/<namespace>/<kind>-<name>.yaml\n\n"
+            "Apply manifests in dependency order. Save files as:\n"
+            "- CRDs first, then namespaces, then configmaps/secrets, then deployments/services\n\n"
+            "Write a snapshot report to .factory/simulate/snapshot-report.md listing:\n"
+            "- Number of resources exported per namespace\n"
+            "- Resources skipped and why\n"
+            "- Sanitization actions taken"
+        ),
+        reads={".factory/simulate/analysis.json"},
+        writes={".factory/simulate/snapshot-report.md"},
+        timeout=600,
+    )
+
+    nodes["gate_snapshot"] = GateNode(
+        id="gate_snapshot",
+        evaluator_type="fn",
+        evaluator_command=(
+            "if [ -d {project_path}/.factory/simulate/manifests ] && "
+            '[ "$(find {project_path}/.factory/simulate/manifests -name \'*.yaml\' | head -1)" ]; '
+            "then echo 'PROCEED: manifests found'; "
+            "else echo 'FAIL: no manifests exported'; exit 1; fi"
+        ),
+        reads={".factory/simulate/snapshot-report.md"},
+    )
+
+    nodes["provision_cluster"] = AgentNode(
+        id="provision_cluster",
+        role=AgentRole.BUILDER,
+        prompt_template=(
+            "Provision an ephemeral Kubernetes cluster for troubleshooting.\n\n"
+            "Read .factory/simulate/analysis.json for cluster_type (microshift or minikube).\n\n"
+            "If cluster_type is 'minikube':\n"
+            "  1. Run `minikube start --profile factory-simulate --memory 2048 --cpus 2`\n"
+            "  2. Wait for cluster ready: `minikube status --profile factory-simulate`\n"
+            "  3. Export kubeconfig: `minikube kubeconfig --profile factory-simulate`\n"
+            "     Save to .factory/simulate/ephemeral-kubeconfig\n\n"
+            "If cluster_type is 'microshift':\n"
+            "  1. Start microshift container: "
+            "`podman run -d --name factory-simulate-microshift --privileged "
+            "-v microshift-data:/var/lib -p 6443:6443 quay.io/microshift/microshift-aio`\n"
+            "  2. Wait for API server ready (poll with retries)\n"
+            "  3. Copy kubeconfig from container to .factory/simulate/ephemeral-kubeconfig\n\n"
+            "Write a provision report to .factory/simulate/provision-report.md with:\n"
+            "- Cluster type used\n"
+            "- Kubeconfig path\n"
+            "- Cluster status (nodes, API server health)\n"
+            "- Any warnings or issues"
+        ),
+        reads={".factory/simulate/analysis.json"},
+        writes={".factory/simulate/provision-report.md"},
+        timeout=600,
+    )
+
+    nodes["gate_provision"] = GateNode(
+        id="gate_provision",
+        evaluator_type="fn",
+        evaluator_command=(
+            "if [ -f {project_path}/.factory/simulate/ephemeral-kubeconfig ] && "
+            "kubectl --kubeconfig {project_path}/.factory/simulate/ephemeral-kubeconfig "
+            "cluster-info 2>/dev/null; "
+            "then echo 'PROCEED: cluster responding'; "
+            "else echo 'FAIL: cluster not ready'; exit 1; fi"
+        ),
+        reads={".factory/simulate/provision-report.md"},
+    )
+
+    nodes["apply_manifests"] = AgentNode(
+        id="apply_manifests",
+        role=AgentRole.BUILDER,
+        prompt_template=(
+            "Apply sanitized manifests to the ephemeral cluster.\n\n"
+            "Read the ephemeral kubeconfig from .factory/simulate/ephemeral-kubeconfig.\n"
+            "Read manifests from .factory/simulate/manifests/.\n\n"
+            "Apply in dependency order:\n"
+            "1. CRDs (if any)\n"
+            "2. Namespaces\n"
+            "3. ConfigMaps and Secrets\n"
+            "4. Services, ServiceAccounts, Roles, RoleBindings\n"
+            "5. Deployments, StatefulSets, DaemonSets\n"
+            "6. Ingresses, Routes, NetworkPolicies\n\n"
+            "For each manifest:\n"
+            "- Run `kubectl --kubeconfig <ephemeral> apply -f <manifest>`\n"
+            "- On error: log the error and continue (do NOT abort)\n"
+            "- Track applied vs skipped resources\n\n"
+            "Write an apply report to .factory/simulate/apply-report.md with:\n"
+            "- Resources applied successfully (count per kind)\n"
+            "- Resources that failed and error messages\n"
+            "- Resources skipped and reasons"
+        ),
+        reads={".factory/simulate/provision-report.md"},
+        writes={".factory/simulate/apply-report.md"},
+        timeout=600,
+    )
+
+    nodes["verify_cluster"] = AgentNode(
+        id="verify_cluster",
+        role=AgentRole.HEALTH_CHECKER,
+        prompt_template=(
+            "Verify the structural topology of the ephemeral cluster.\n\n"
+            "Read the ephemeral kubeconfig from .factory/simulate/ephemeral-kubeconfig.\n"
+            "Read .factory/simulate/apply-report.md for what was applied.\n\n"
+            "Run these verification checks:\n"
+            "1. Namespace existence: `kubectl get namespaces` — verify expected namespaces exist\n"
+            "2. Resource counts: For each namespace, compare expected vs actual resource counts\n"
+            "3. Service topology: Verify services have matching endpoints/selectors\n"
+            "4. Deployment status: Check deployments exist (pods may be Pending — that is OK)\n"
+            "5. ConfigMap/Secret presence: Verify referenced configs exist\n\n"
+            "Calculate a structural health score (0.0–1.0):\n"
+            "- 1.0 = all expected resources exist with correct topology\n"
+            "- 0.5 = at least half of expected resources applied\n"
+            "- 0.0 = nothing applied or cluster unreachable\n\n"
+            "Write a verification report to .factory/simulate/verify-report.md with:\n"
+            "- Structural health score\n"
+            "- Per-namespace resource comparison table\n"
+            "- Topology issues found\n"
+            "- Connectivity info: `export KUBECONFIG=.factory/simulate/ephemeral-kubeconfig`"
+        ),
+        reads={".factory/simulate/apply-report.md"},
+        writes={".factory/simulate/verify-report.md"},
+        timeout=600,
+    )
+
+    nodes["gate_verify"] = GateNode(
+        id="gate_verify",
+        evaluator_type="fn",
+        evaluator_command=(
+            "if grep -qE 'score.*[0-9]' {project_path}/.factory/simulate/verify-report.md; "
+            "then echo 'PROCEED: verification report generated'; "
+            "else echo 'FAIL: no verification score found'; exit 1; fi"
+        ),
+        reads={".factory/simulate/verify-report.md"},
+    )
+
+    nodes["archivist"] = AgentNode(
+        id="archivist",
+        role=AgentRole.ARCHIVIST,
+        model="haiku",
+        blocking=False,
+        prompt_template=(
+            "Archive this simulate session.\n\n"
+            "Read the following artifacts:\n"
+            "- .factory/simulate/analysis.json (query analysis)\n"
+            "- .factory/simulate/snapshot-report.md (what was exported)\n"
+            "- .factory/simulate/provision-report.md (cluster provisioning)\n"
+            "- .factory/simulate/apply-report.md (manifest application)\n"
+            "- .factory/simulate/verify-report.md (structural verification)\n\n"
+            "Write a concise session summary to .factory/archive/simulate-session.md covering:\n"
+            "- Original query and extracted scope\n"
+            "- Cluster type used\n"
+            "- Resources applied vs skipped\n"
+            "- Structural health score\n"
+            "- Lessons learned or issues encountered"
+        ),
+        reads={".factory/simulate/verify-report.md"},
+        writes={".factory/archive/simulate-session.md"},
+        timeout=300,
+    )
+
+    edges = [
+        Edge(source="analyze_query", target="gate_analysis"),
+        Edge(source="gate_analysis", target="snapshot_cluster", condition=VerdictType.PROCEED),
+        Edge(source="gate_analysis", target="analyze_query", condition=VerdictType.RELOOP),
+        Edge(source="snapshot_cluster", target="gate_snapshot"),
+        Edge(source="gate_snapshot", target="provision_cluster", condition=VerdictType.PROCEED),
+        Edge(source="provision_cluster", target="gate_provision"),
+        Edge(source="gate_provision", target="apply_manifests", condition=VerdictType.PROCEED),
+        Edge(source="apply_manifests", target="verify_cluster"),
+        Edge(source="verify_cluster", target="gate_verify"),
+        Edge(source="gate_verify", target="archivist", condition=VerdictType.PROCEED),
+    ]
+
+    def trigger(state: ProjectState, ctx: dict[str, Any]) -> bool:
+        return ctx.get("mode") == "simulate"
+
+    return Workflow(
+        name="simulate",
+        nodes=nodes,
+        edges=edges,
+        start_node="analyze_query",
+        trigger=trigger,
+        terminal=True,
+    )
+
+
 def register_all() -> dict[str, Workflow]:
     """Build and return all workflow definitions."""
     from factory.workflow.deep_qa import workflow as deep_qa_workflow
@@ -2744,4 +3003,5 @@ def register_all() -> dict[str, Workflow]:
         "spec-generate": spec_generate_workflow(),
         "spec-update": spec_update_workflow(),
         "founder": founder_workflow(),
+        "simulate": simulate_workflow(),
     }

@@ -830,6 +830,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run directly in the project directory without creating a worktree "
         "(useful for testing in-flight branch changes)",
     )
+    p.add_argument(
+        "--target-kubeconfig",
+        default=None,
+        help="Path to the target cluster kubeconfig (required for --mode simulate)",
+    )
+    p.add_argument(
+        "--query",
+        default=None,
+        help="Troubleshooting query text (for --mode simulate; interactive prompt if omitted)",
+    )
+    p.add_argument(
+        "--cluster-type",
+        choices=["microshift", "minikube"],
+        default="microshift",
+        help="Ephemeral cluster type (default: microshift)",
+    )
 
     # run
     p = sub.add_parser("run", help="Run factory cycle (delegates to CEO agent)")
@@ -962,6 +978,22 @@ def build_parser() -> argparse.ArgumentParser:
         dest="no_worktree",
         help="Run directly in the project directory without creating a worktree "
         "(useful for testing in-flight branch changes)",
+    )
+    p.add_argument(
+        "--target-kubeconfig",
+        default=None,
+        help="Path to the target cluster kubeconfig (required for --mode simulate)",
+    )
+    p.add_argument(
+        "--query",
+        default=None,
+        help="Troubleshooting query text (for --mode simulate; interactive prompt if omitted)",
+    )
+    p.add_argument(
+        "--cluster-type",
+        choices=["microshift", "minikube"],
+        default="microshift",
+        help="Ephemeral cluster type (default: microshift)",
     )
 
     # tmux — launch factory run in a detached tmux session

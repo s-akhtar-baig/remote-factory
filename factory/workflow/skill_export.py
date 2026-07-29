@@ -170,6 +170,17 @@ WORKFLOW_META: dict[str, dict[str, str | list[str]]] = {
         ),
         "argument_hint": "<project_path>",
     },
+    "simulate": {
+        "description": (
+            "Simulate mode — provision an ephemeral cluster approximating a target "
+            "OpenShift/K8s cluster for troubleshooting. Analyzes a user query to identify "
+            "relevant namespaces and resources, snapshots and sanitizes manifests from the "
+            "target cluster, provisions a local cluster (microshift or minikube), applies "
+            "manifests, and verifies structural topology. Terminal — cluster stays alive "
+            "for interactive troubleshooting."
+        ),
+        "argument_hint": '<project_path> --mode simulate --target-kubeconfig <path> [--query "<text>"]',
+    },
 }
 
 

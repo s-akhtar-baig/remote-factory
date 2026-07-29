@@ -532,6 +532,21 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         else:
             clean_pr_resolved = False
 
+    sim_kubeconfig = getattr(args, "target_kubeconfig", None)
+    sim_query = getattr(args, "query", None)
+    sim_cluster_type = getattr(args, "cluster_type", "microshift")
+
+    if mode == "simulate":
+        simulate_dir = project_path / ".factory" / "simulate"
+        simulate_dir.mkdir(parents=True, exist_ok=True)
+        task_config = {
+            "query": sim_query or "",
+            "target_kubeconfig": str(sim_kubeconfig) if sim_kubeconfig else "",
+            "cluster_type": sim_cluster_type,
+            "max_replicas": 1,
+        }
+        (simulate_dir / "task.json").write_text(json.dumps(task_config, indent=2))
+
     task = _build_ceo_task(
         wt_path,
         ceo_mode,
@@ -554,6 +569,9 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         display_mode=banner_mode,
         create_description=create_description,
         update_existing_mode=update_existing_mode,
+        target_kubeconfig=sim_kubeconfig,
+        simulate_query=sim_query,
+        cluster_type=sim_cluster_type,
     )
 
     session_name = _derive_session_name(
@@ -1599,6 +1617,9 @@ def _build_ceo_task(
     display_mode: str | None = None,
     create_description: str | None = None,
     update_existing_mode: str | None = None,
+    target_kubeconfig: str | None = None,
+    simulate_query: str | None = None,
+    cluster_type: str | None = None,
 ) -> str:
     """Build the CEO agent task string from mode and optional context."""
     shown_mode = display_mode if display_mode is not None else mode
@@ -1826,6 +1847,22 @@ def _build_ceo_task(
             "run --mode improve afterward to harden what works. "
             "The full step-by-step playbook is in your system prompt above."
         )
+    elif mode == "simulate":
+        task += (
+            "\n\nRun Simulate mode: provision an ephemeral cluster approximating the "
+            "target cluster for troubleshooting. Analyze the user's query to identify "
+            "relevant namespaces and resources, snapshot manifests from the target cluster, "
+            "sanitize them, provision a local cluster, apply manifests, and verify "
+            "structural topology. The cluster stays alive after the workflow completes — "
+            "the user runs `factory simulate-teardown` to clean up. "
+            "The full step-by-step playbook is in your system prompt above."
+        )
+        if target_kubeconfig:
+            task += f"\n\n## Target Kubeconfig\n`{target_kubeconfig}`"
+        if simulate_query:
+            task += f"\n\n## Troubleshooting Query\n{simulate_query}"
+        if cluster_type:
+            task += f"\n\n## Cluster Type\n{cluster_type}"
     else:
         task += (
             f"\n\nRun {mode} mode. Follow the step-by-step playbook in your system prompt "
