@@ -535,6 +535,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     sim_kubeconfig = getattr(args, "target_kubeconfig", None)
     sim_query = getattr(args, "query", None)
     sim_cluster_type = getattr(args, "cluster_type", "microshift")
+    sim_microshift_port = getattr(args, "microshift_port", 6443)
 
     if mode == "simulate":
         simulate_dir = project_path / ".factory" / "simulate"
@@ -543,6 +544,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             "query": sim_query or "",
             "target_kubeconfig": str(sim_kubeconfig) if sim_kubeconfig else "",
             "cluster_type": sim_cluster_type,
+            "microshift_port": sim_microshift_port,
             "max_replicas": 1,
         }
         (simulate_dir / "task.json").write_text(json.dumps(task_config, indent=2))
@@ -572,6 +574,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         target_kubeconfig=sim_kubeconfig,
         simulate_query=sim_query,
         cluster_type=sim_cluster_type,
+        microshift_port=sim_microshift_port,
     )
 
     session_name = _derive_session_name(
@@ -1620,6 +1623,7 @@ def _build_ceo_task(
     target_kubeconfig: str | None = None,
     simulate_query: str | None = None,
     cluster_type: str | None = None,
+    microshift_port: int = 6443,
 ) -> str:
     """Build the CEO agent task string from mode and optional context."""
     shown_mode = display_mode if display_mode is not None else mode
@@ -1863,6 +1867,8 @@ def _build_ceo_task(
             task += f"\n\n## Troubleshooting Query\n{simulate_query}"
         if cluster_type:
             task += f"\n\n## Cluster Type\n{cluster_type}"
+        if microshift_port != 6443:
+            task += f"\n\n## MicroShift Port\n{microshift_port}"
     else:
         task += (
             f"\n\nRun {mode} mode. Follow the step-by-step playbook in your system prompt "

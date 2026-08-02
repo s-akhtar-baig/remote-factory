@@ -176,6 +176,47 @@ class TestSimulateNodeDetails:
         assert len(reloop_edges) == 1
 
 
+class TestSimulateMicroshiftPort:
+    """Verify microshift port is configurable, not hardcoded."""
+
+    def test_provision_cluster_no_hardcoded_port_mapping(self) -> None:
+        """provision_cluster prompt must NOT contain literal -p 6443:6443."""
+        wf = simulate_workflow()
+        node = wf.nodes["provision_cluster"]
+        assert isinstance(node, AgentNode)
+        assert "-p 6443:6443" not in node.prompt_template
+
+    def test_provision_cluster_reads_port_from_analysis(self) -> None:
+        """provision_cluster prompt instructs reading microshift_port from analysis.json."""
+        wf = simulate_workflow()
+        node = wf.nodes["provision_cluster"]
+        assert isinstance(node, AgentNode)
+        assert "microshift_port" in node.prompt_template
+        assert "analysis.json" in node.prompt_template
+
+    def test_provision_cluster_variable_host_fixed_container_port(self) -> None:
+        """Port mapping uses -p <microshift_port>:6443 — variable host, fixed container."""
+        wf = simulate_workflow()
+        node = wf.nodes["provision_cluster"]
+        assert isinstance(node, AgentNode)
+        assert "<microshift_port>:6443" in node.prompt_template
+
+    def test_analyze_query_includes_microshift_port_in_schema(self) -> None:
+        """analysis.json schema includes microshift_port field."""
+        wf = simulate_workflow()
+        node = wf.nodes["analyze_query"]
+        assert isinstance(node, AgentNode)
+        assert "microshift_port" in node.prompt_template
+
+    def test_provision_cluster_patches_kubeconfig(self) -> None:
+        """provision_cluster prompt includes kubeconfig server URL patching."""
+        wf = simulate_workflow()
+        node = wf.nodes["provision_cluster"]
+        assert isinstance(node, AgentNode)
+        assert "sed" in node.prompt_template
+        assert "ephemeral-kubeconfig" in node.prompt_template
+
+
 class TestSimulateDataFlow:
     """Verify reads/writes declarations for data flow validation."""
 

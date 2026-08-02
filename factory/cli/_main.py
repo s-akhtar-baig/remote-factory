@@ -846,6 +846,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="microshift",
         help="Ephemeral cluster type (default: microshift)",
     )
+    p.add_argument(
+        "--microshift-port",
+        type=int,
+        default=6443,
+        help="MicroShift API server host port (default: 6443)",
+    )
 
     # run
     p = sub.add_parser("run", help="Run factory cycle (delegates to CEO agent)")
@@ -994,6 +1000,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["microshift", "minikube"],
         default="microshift",
         help="Ephemeral cluster type (default: microshift)",
+    )
+    p.add_argument(
+        "--microshift-port",
+        type=int,
+        default=6443,
+        help="MicroShift API server host port (default: 6443)",
     )
 
     # tmux — launch factory run in a detached tmux session

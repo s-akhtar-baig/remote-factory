@@ -2727,8 +2727,8 @@ def simulate_workflow() -> Workflow:
             "Analyze the user's troubleshooting query to identify which Kubernetes "
             "resources to snapshot from the target cluster.\n\n"
             "Read the simulate task config from .factory/simulate/task.json for the "
-            "user's query text, target kubeconfig path, and any explicit namespace or "
-            "resource-type overrides.\n\n"
+            "user's query text, target kubeconfig path, microshift_port (default 6443), "
+            "and any explicit namespace or resource-type overrides.\n\n"
             "If the user provided explicit --target-namespaces or --resource-types, "
             "use those directly. Otherwise, analyze the query to extract:\n"
             "- Relevant namespaces (max 10)\n"
@@ -2746,6 +2746,7 @@ def simulate_workflow() -> Workflow:
             '  "namespaces": ["ns1", "ns2"],\n'
             '  "resource_types": ["deployments", "services", "configmaps"],\n'
             '  "cluster_type": "microshift|minikube",\n'
+            '  "microshift_port": 6443,\n'
             '  "max_replicas": 1,\n'
             '  "rationale": "<why these namespaces/resources are relevant>"\n'
             "}\n"
@@ -2814,20 +2815,32 @@ def simulate_workflow() -> Workflow:
         role=AgentRole.BUILDER,
         prompt_template=(
             "Provision an ephemeral Kubernetes cluster for troubleshooting.\n\n"
-            "Read .factory/simulate/analysis.json for cluster_type (microshift or minikube).\n\n"
+            "Read .factory/simulate/analysis.json for cluster_type (microshift or minikube) "
+            "and microshift_port (integer, default 6443 if not present).\n\n"
             "If cluster_type is 'minikube':\n"
             "  1. Run `minikube start --profile factory-simulate --memory 2048 --cpus 2`\n"
             "  2. Wait for cluster ready: `minikube status --profile factory-simulate`\n"
             "  3. Export kubeconfig: `minikube kubeconfig --profile factory-simulate`\n"
             "     Save to .factory/simulate/ephemeral-kubeconfig\n\n"
             "If cluster_type is 'microshift':\n"
-            "  1. Start microshift container: "
-            "`podman run -d --name factory-simulate-microshift --privileged "
-            "-v microshift-data:/var/lib -p 6443:6443 quay.io/microshift/microshift-aio`\n"
-            "  2. Wait for API server ready (poll with retries)\n"
-            "  3. Copy kubeconfig from container to .factory/simulate/ephemeral-kubeconfig\n\n"
+            "  1. Read the microshift_port value from analysis.json (default: 6443 if missing)\n"
+            "  2. Start microshift container — the host port is microshift_port, "
+            "the container port is always 6443:\n"
+            "     `podman run -d --name factory-simulate-microshift --privileged "
+            "-v microshift-data:/var/lib -p <microshift_port>:6443 "
+            "quay.io/microshift/microshift-aio`\n"
+            "     Example: if microshift_port is 8443, use `-p 8443:6443`\n"
+            "     Example: if microshift_port is the default (6443), the mapping is the default port to 6443\n"
+            "  3. Wait for API server ready (poll with retries)\n"
+            "  4. Copy kubeconfig from container to .factory/simulate/ephemeral-kubeconfig\n"
+            "  5. Patch the kubeconfig server URL to use the configured host port:\n"
+            "     `sed -i '' \"s|server: https://127.0.0.1:6443|"
+            "server: https://127.0.0.1:<microshift_port>|\" "
+            ".factory/simulate/ephemeral-kubeconfig`\n"
+            "     Skip this sed step if microshift_port is 6443 (no change needed).\n\n"
             "Write a provision report to .factory/simulate/provision-report.md with:\n"
             "- Cluster type used\n"
+            "- Host port used for MicroShift API server\n"
             "- Kubeconfig path\n"
             "- Cluster status (nodes, API server health)\n"
             "- Any warnings or issues"
