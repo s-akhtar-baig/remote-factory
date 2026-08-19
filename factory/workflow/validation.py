@@ -85,7 +85,7 @@ def _validate_data_dependencies(
                 pred_node = workflow.nodes.get(pred_id)
                 if pred_node:
                     available_writes |= pred_node.writes
-            missing = node.reads - available_writes - workflow.external_inputs
+            missing = node.reads - available_writes
             if missing:
                 issues.append(
                     f"node '{nid}' reads {missing} but no predecessor writes them"

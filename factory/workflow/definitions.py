@@ -735,7 +735,6 @@ def design_workflow(just_plan: bool = False) -> Workflow:
     )
 
     wf.start_node = "gate_has_factory"
-    wf.external_inputs = {"factory.md"}
 
     wf.nodes["gate_strategy"] = GateNode(
         id="gate_strategy",
