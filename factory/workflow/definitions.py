@@ -666,6 +666,7 @@ def design_workflow(just_plan: bool = False) -> Workflow:
             '"'
         ),
         writes={".factory/eval_profile.json"},
+        notes="Mark the eval profile as human-reviewed by setting the human_reviewed flag.",
     )
 
     wf.nodes["gate_factory_md"] = GateNode(
@@ -678,6 +679,7 @@ def design_workflow(just_plan: bool = False) -> Workflow:
             'print("PROCEED" if exists else "HALT")'
             '"'
         ),
+        reads={"factory.md"},
     )
 
     wf.nodes["create_factory_md"] = AgentNode(
@@ -692,12 +694,15 @@ def design_workflow(just_plan: bool = False) -> Workflow:
             "populate research sections (Research Target, Mutable/Fixed Surfaces, etc.)."
         ),
         reads={".factory/eval_profile.json"},
+        writes={"factory.md"},
     )
 
     wf.nodes["factory_init"] = FnNode(
         id="factory_init",
         command="factory init {project_path}",
+        reads={"factory.md"},
         writes={".factory/config.json"},
+        notes="Parse factory.md and generate .factory/config.json. Must run after factory.md is created.",
     )
 
     # Study subgraph: graph_update → study
@@ -730,6 +735,7 @@ def design_workflow(just_plan: bool = False) -> Workflow:
     )
 
     wf.start_node = "gate_has_factory"
+    wf.external_inputs = {"factory.md"}
 
     wf.nodes["gate_strategy"] = GateNode(
         id="gate_strategy",
