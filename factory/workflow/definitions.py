@@ -635,6 +635,71 @@ def design_workflow(just_plan: bool = False) -> Workflow:
         writes={".factory/eval_profile.json"},
     )
 
+    # Bootstrap nodes: complete factory setup after discover on HALT path
+    wf.nodes["eval_test"] = FnNode(
+        id="eval_test",
+        command="cd {project_path} && python eval/score.py",
+        writes={".factory/reviews/eval-test-latest.md"},
+    )
+
+    wf.nodes["gate_eval"] = GateNode(
+        id="gate_eval",
+        evaluator_type="agent",
+        evaluator_role=AgentRole.CEO,
+        gate_prompt=(
+            "Check eval output. Did all dimensions pass? "
+            "If any dimension failed, dispatch the Builder to fix it "
+            "(install missing tool, adjust command, remove broken dimension). "
+            "PROCEED only when all dimensions produce valid scores."
+        ),
+        reads={".factory/reviews/eval-test-latest.md"},
+    )
+
+    wf.nodes["mark_reviewed"] = FnNode(
+        id="mark_reviewed",
+        command=(
+            'python3 -c "'
+            "import json; from pathlib import Path; "
+            "p = Path('{project_path}/.factory/eval_profile.json'); "
+            "d = json.loads(p.read_text()); d['human_reviewed'] = True; "
+            "p.write_text(json.dumps(d, indent=2))"
+            '"'
+        ),
+        writes={".factory/eval_profile.json"},
+    )
+
+    wf.nodes["gate_factory_md"] = GateNode(
+        id="gate_factory_md",
+        evaluator_type="fn",
+        evaluator_command=(
+            'python3 -c "'
+            "from pathlib import Path; "
+            'exists = Path("{project_path}/factory.md").exists(); '
+            'print("PROCEED" if exists else "HALT")'
+            '"'
+        ),
+    )
+
+    wf.nodes["create_factory_md"] = AgentNode(
+        id="create_factory_md",
+        role=AgentRole.CEO,
+        prompt_template=(
+            "Create factory.md from template. "
+            "Copy the factory config template to the project root. "
+            "Fill in: Goal, Scope, Guards, Eval command, Threshold, and Smoke Test. "
+            "If .factory/eval_spec.json exists, populate the Eval Spec section. "
+            "If .factory/strategy/current.md has a Research Configuration section, "
+            "populate research sections (Research Target, Mutable/Fixed Surfaces, etc.)."
+        ),
+        reads={".factory/eval_profile.json"},
+    )
+
+    wf.nodes["factory_init"] = FnNode(
+        id="factory_init",
+        command="factory init {project_path}",
+        writes={".factory/config.json"},
+    )
+
     # Study subgraph: graph_update → study
     s_nodes, s_edges = _study_subgraph()
     wf.nodes.update(s_nodes)
@@ -651,7 +716,15 @@ def design_workflow(just_plan: bool = False) -> Workflow:
             *s_edges,
             Edge(source="gate_has_factory", target="graph_update", condition=VerdictType.PROCEED),
             Edge(source="gate_has_factory", target="discover", condition=VerdictType.HALT),
-            Edge(source="discover", target="graph_update"),
+            Edge(source="discover", target="eval_test"),
+            Edge(source="eval_test", target="gate_eval"),
+            Edge(source="gate_eval", target="mark_reviewed", condition=VerdictType.PROCEED),
+            Edge(source="gate_eval", target="eval_test", condition=VerdictType.RELOOP),
+            Edge(source="mark_reviewed", target="gate_factory_md"),
+            Edge(source="gate_factory_md", target="create_factory_md", condition=VerdictType.HALT),
+            Edge(source="gate_factory_md", target="factory_init", condition=VerdictType.PROCEED),
+            Edge(source="create_factory_md", target="factory_init"),
+            Edge(source="factory_init", target="graph_update"),
             Edge(source="concat_study", target="fork_research"),
         ]
     )

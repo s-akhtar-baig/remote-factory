@@ -133,10 +133,16 @@ class TestDesignIsBuiltWithUserGate:
         w1_ids = set(w1.nodes.keys())
         w2_ids = set(w2.nodes.keys())
 
-        # Design has extra nodes: gate_has_factory, discover, and study subgraph
+        # Design has extra nodes: gate_has_factory, discover, bootstrap chain, and study subgraph
         assert w2_ids == w1_ids | {
             "gate_has_factory",
             "discover",
+            "eval_test",
+            "gate_eval",
+            "mark_reviewed",
+            "gate_factory_md",
+            "create_factory_md",
+            "factory_init",
             "graph_update",
             "study",
             "graph_explorer",
@@ -211,11 +217,11 @@ class TestDesignStudyNode:
         assert node.command == "factory discover {project_path}"
         assert ".factory/eval_profile.json" in node.writes
 
-    def test_design_discover_to_graph_update_edge(self) -> None:
-        """There must be an unconditional edge from discover to graph_update."""
+    def test_design_discover_to_eval_test_edge(self) -> None:
+        """There must be an unconditional edge from discover to eval_test (bootstrap chain)."""
         wf = design_workflow()
         assert any(
-            e.source == "discover" and e.target == "graph_update" and e.condition is None
+            e.source == "discover" and e.target == "eval_test" and e.condition is None
             for e in wf.edges
         )
 
