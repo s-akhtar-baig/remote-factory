@@ -1120,11 +1120,6 @@ class TestBootstrapSubgraph:
             "create_factory_md", "factory_init",
         }
 
-    def test_bootstrap_subgraph_no_gate_factory_md(self) -> None:
-        """Bootstrap subgraph does NOT contain gate_factory_md."""
-        nodes, _ = _bootstrap_subgraph()
-        assert "gate_factory_md" not in nodes
-
     def test_bootstrap_subgraph_edge_count(self) -> None:
         """Bootstrap subgraph has 5 internal edges."""
         _, edges = _bootstrap_subgraph()
