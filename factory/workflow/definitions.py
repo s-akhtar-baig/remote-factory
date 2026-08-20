@@ -1562,6 +1562,7 @@ def discover_workflow() -> Workflow:
     factory discover → CEO verify → re-detect state
     """
     nodes: dict[str, Any] = {}
+    edges: list[Edge] = []
 
     nodes["discover"] = FnNode(
         id="discover",
