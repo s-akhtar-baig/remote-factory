@@ -10,11 +10,13 @@ from factory.models import ProjectState
 from factory.workflow.definitions import (
     DOC_FRESHNESS_GATE_PROMPT,
     _GRAPH_EXPLORER_PROMPT,  # noqa: F401
+    _bootstrap_subgraph,
     _graph_explorer_prompt,  # noqa: F401
     _study_subgraph,  # noqa: F401
     build_workflow,
     create_workflow,
     design_workflow,
+    discover_workflow,
     doc_generate_workflow,
     doc_update_workflow,
     founder_workflow,
@@ -140,7 +142,6 @@ class TestDesignIsBuiltWithUserGate:
             "eval_test",
             "gate_eval",
             "mark_reviewed",
-            "gate_factory_md",
             "create_factory_md",
             "factory_init",
             "graph_update",
@@ -1106,3 +1107,78 @@ class TestStudySubgraphFocus:
     def test_graph_explorer_prompt_without_focus(self) -> None:
         assert _graph_explorer_prompt() == _GRAPH_EXPLORER_PROMPT
         assert _graph_explorer_prompt(None) == _GRAPH_EXPLORER_PROMPT
+
+
+# ── Discover bootstrap tests ─────────────────────────────────
+
+
+class TestDiscoverBootstrap:
+    def test_discover_has_bootstrap(self) -> None:
+        """Discover workflow includes bootstrap nodes after gate_discover."""
+        wf = discover_workflow()
+        bootstrap_nodes = {"eval_test", "gate_eval", "mark_reviewed", "create_factory_md", "factory_init"}
+        for node_id in bootstrap_nodes:
+            assert node_id in wf.nodes, f"discover workflow missing bootstrap node '{node_id}'"
+
+    def test_discover_bootstrap_edge_wiring(self) -> None:
+        """gate_discover PROCEED routes to eval_test (bootstrap entry)."""
+        wf = discover_workflow()
+        assert any(
+            e.source == "gate_discover"
+            and e.target == "eval_test"
+            and e.condition == VerdictType.PROCEED
+            for e in wf.edges
+        )
+
+    def test_discover_bootstrap_exit(self) -> None:
+        """factory_init routes to redetect (bootstrap exit)."""
+        wf = discover_workflow()
+        assert any(
+            e.source == "factory_init" and e.target == "redetect"
+            for e in wf.edges
+        )
+
+    def test_discover_valid(self) -> None:
+        """Discover workflow passes validation with bootstrap nodes."""
+        wf = discover_workflow()
+        issues = wf.validate_graph()
+        assert issues == [], f"discover workflow has issues: {issues}"
+
+
+# ── Bootstrap subgraph tests ─────────────────────────────────
+
+
+class TestBootstrapSubgraph:
+    def test_bootstrap_subgraph_nodes(self) -> None:
+        """Bootstrap subgraph has exactly 5 nodes."""
+        nodes, edges = _bootstrap_subgraph()
+        assert set(nodes.keys()) == {
+            "eval_test", "gate_eval", "mark_reviewed",
+            "create_factory_md", "factory_init",
+        }
+
+    def test_bootstrap_subgraph_no_gate_factory_md(self) -> None:
+        """Bootstrap subgraph does NOT contain gate_factory_md."""
+        nodes, _ = _bootstrap_subgraph()
+        assert "gate_factory_md" not in nodes
+
+    def test_bootstrap_subgraph_edge_count(self) -> None:
+        """Bootstrap subgraph has 5 internal edges."""
+        _, edges = _bootstrap_subgraph()
+        assert len(edges) == 5
+
+    def test_bootstrap_subgraph_entry_exit(self) -> None:
+        """Entry is eval_test, exit is factory_init."""
+        nodes, edges = _bootstrap_subgraph()
+        sources = {e.source for e in edges}
+        assert "factory_init" not in sources
+
+    def test_eval_test_reads_eval_profile(self) -> None:
+        """eval_test must declare reads on eval_profile.json."""
+        nodes, _ = _bootstrap_subgraph()
+        assert ".factory/eval_profile.json" in nodes["eval_test"].reads
+
+    def test_mark_reviewed_reads_eval_profile(self) -> None:
+        """mark_reviewed must declare reads on eval_profile.json (read-modify-write)."""
+        nodes, _ = _bootstrap_subgraph()
+        assert ".factory/eval_profile.json" in nodes["mark_reviewed"].reads

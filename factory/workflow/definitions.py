@@ -264,6 +264,90 @@ def _deep_qa_subgraph(
     return nodes, internal_edges
 
 
+# ── Bootstrap subgraph helper ─────────────────────────────────
+
+
+def _bootstrap_subgraph() -> tuple[dict[str, Any], list[Edge]]:
+    """Return (nodes, internal_edges) for the project bootstrap chain.
+
+    Five nodes run sequentially:
+
+        eval_test → gate_eval → mark_reviewed → create_factory_md → factory_init
+
+    The caller wires the entry edge (→ eval_test) and exit edge
+    (factory_init →) into the surrounding workflow.
+    """
+    nodes: dict[str, Any] = {}
+
+    nodes["eval_test"] = FnNode(
+        id="eval_test",
+        command="cd {project_path} && python eval/score.py",
+        reads={".factory/eval_profile.json"},
+        writes={".factory/reviews/eval-test-latest.md"},
+    )
+
+    nodes["gate_eval"] = GateNode(
+        id="gate_eval",
+        evaluator_type="agent",
+        evaluator_role=AgentRole.CEO,
+        gate_prompt=(
+            "Check eval output. Did all dimensions pass? "
+            "If any dimension failed, dispatch the Builder to fix it "
+            "(install missing tool, adjust command, remove broken dimension). "
+            "PROCEED only when all dimensions produce valid scores."
+        ),
+        reads={".factory/reviews/eval-test-latest.md"},
+    )
+
+    nodes["mark_reviewed"] = FnNode(
+        id="mark_reviewed",
+        command=(
+            'python3 -c "'
+            "import json; from pathlib import Path; "
+            "p = Path('{project_path}/.factory/eval_profile.json'); "
+            "d = json.loads(p.read_text()); d['human_reviewed'] = True; "
+            "p.write_text(json.dumps(d, indent=2))"
+            '"'
+        ),
+        reads={".factory/eval_profile.json"},
+        writes={".factory/eval_profile.json"},
+        notes="Mark the eval profile as human-reviewed by setting the human_reviewed flag.",
+    )
+
+    nodes["create_factory_md"] = AgentNode(
+        id="create_factory_md",
+        role=AgentRole.CEO,
+        prompt_template=(
+            "Create factory.md from template. "
+            "Copy the factory config template to the project root. "
+            "Fill in: Goal, Scope, Guards, Eval command, Threshold, and Smoke Test. "
+            "If .factory/eval_spec.json exists, populate the Eval Spec section. "
+            "If .factory/strategy/current.md has a Research Configuration section, "
+            "populate research sections (Research Target, Mutable/Fixed Surfaces, etc.)."
+        ),
+        reads={".factory/eval_profile.json"},
+        writes={"factory.md"},
+    )
+
+    nodes["factory_init"] = FnNode(
+        id="factory_init",
+        command="factory init {project_path}",
+        reads={"factory.md"},
+        writes={".factory/config.json"},
+        notes="Parse factory.md and generate .factory/config.json. Must run after factory.md is created.",
+    )
+
+    internal_edges = [
+        Edge(source="eval_test", target="gate_eval"),
+        Edge(source="gate_eval", target="mark_reviewed", condition=VerdictType.PROCEED),
+        Edge(source="gate_eval", target="eval_test", condition=VerdictType.RELOOP),
+        Edge(source="mark_reviewed", target="create_factory_md"),
+        Edge(source="create_factory_md", target="factory_init"),
+    ]
+
+    return nodes, internal_edges
+
+
 # ── Research subgraph helper ───────────────────────────────────
 
 
@@ -632,78 +716,12 @@ def design_workflow(just_plan: bool = False) -> Workflow:
     wf.nodes["discover"] = FnNode(
         id="discover",
         command="factory discover {project_path}",
-        writes={".factory/eval_profile.json"},
+        writes={".factory/eval_profile.json", "eval/score.py"},
     )
 
-    # Bootstrap nodes: complete factory setup after discover on HALT path
-    wf.nodes["eval_test"] = FnNode(
-        id="eval_test",
-        command="cd {project_path} && python eval/score.py",
-        writes={".factory/reviews/eval-test-latest.md"},
-    )
-
-    wf.nodes["gate_eval"] = GateNode(
-        id="gate_eval",
-        evaluator_type="agent",
-        evaluator_role=AgentRole.CEO,
-        gate_prompt=(
-            "Check eval output. Did all dimensions pass? "
-            "If any dimension failed, dispatch the Builder to fix it "
-            "(install missing tool, adjust command, remove broken dimension). "
-            "PROCEED only when all dimensions produce valid scores."
-        ),
-        reads={".factory/reviews/eval-test-latest.md"},
-    )
-
-    wf.nodes["mark_reviewed"] = FnNode(
-        id="mark_reviewed",
-        command=(
-            'python3 -c "'
-            "import json; from pathlib import Path; "
-            "p = Path('{project_path}/.factory/eval_profile.json'); "
-            "d = json.loads(p.read_text()); d['human_reviewed'] = True; "
-            "p.write_text(json.dumps(d, indent=2))"
-            '"'
-        ),
-        writes={".factory/eval_profile.json"},
-        notes="Mark the eval profile as human-reviewed by setting the human_reviewed flag.",
-    )
-
-    wf.nodes["gate_factory_md"] = GateNode(
-        id="gate_factory_md",
-        evaluator_type="fn",
-        evaluator_command=(
-            'python3 -c "'
-            "from pathlib import Path; "
-            'exists = Path("{project_path}/factory.md").exists(); '
-            'print("PROCEED" if exists else "HALT")'
-            '"'
-        ),
-        reads={"factory.md"},
-    )
-
-    wf.nodes["create_factory_md"] = AgentNode(
-        id="create_factory_md",
-        role=AgentRole.CEO,
-        prompt_template=(
-            "Create factory.md from template. "
-            "Copy the factory config template to the project root. "
-            "Fill in: Goal, Scope, Guards, Eval command, Threshold, and Smoke Test. "
-            "If .factory/eval_spec.json exists, populate the Eval Spec section. "
-            "If .factory/strategy/current.md has a Research Configuration section, "
-            "populate research sections (Research Target, Mutable/Fixed Surfaces, etc.)."
-        ),
-        reads={".factory/eval_profile.json"},
-        writes={"factory.md"},
-    )
-
-    wf.nodes["factory_init"] = FnNode(
-        id="factory_init",
-        command="factory init {project_path}",
-        reads={"factory.md"},
-        writes={".factory/config.json"},
-        notes="Parse factory.md and generate .factory/config.json. Must run after factory.md is created.",
-    )
+    # Bootstrap subgraph: complete factory setup after discover on HALT path
+    b_nodes, b_edges = _bootstrap_subgraph()
+    wf.nodes.update(b_nodes)
 
     # Study subgraph: graph_update → study
     s_nodes, s_edges = _study_subgraph()
@@ -722,13 +740,7 @@ def design_workflow(just_plan: bool = False) -> Workflow:
             Edge(source="gate_has_factory", target="graph_update", condition=VerdictType.PROCEED),
             Edge(source="gate_has_factory", target="discover", condition=VerdictType.HALT),
             Edge(source="discover", target="eval_test"),
-            Edge(source="eval_test", target="gate_eval"),
-            Edge(source="gate_eval", target="mark_reviewed", condition=VerdictType.PROCEED),
-            Edge(source="gate_eval", target="eval_test", condition=VerdictType.RELOOP),
-            Edge(source="mark_reviewed", target="gate_factory_md"),
-            Edge(source="gate_factory_md", target="create_factory_md", condition=VerdictType.HALT),
-            Edge(source="gate_factory_md", target="factory_init", condition=VerdictType.PROCEED),
-            Edge(source="create_factory_md", target="factory_init"),
+            *b_edges,
             Edge(source="factory_init", target="graph_update"),
             Edge(source="concat_study", target="fork_research"),
         ]
@@ -1545,12 +1557,12 @@ def meta_workflow() -> Workflow:
 
 
 def discover_workflow() -> Workflow:
-    """W₆: Discover Mode — auto-discover eval dimensions and generate eval harness.
+    """W₆: Discover Mode — auto-discover eval dimensions, bootstrap, and re-detect.
 
-    factory discover → CEO verify → re-detect state
+    discover → gate_discover → eval_test → gate_eval → mark_reviewed →
+    create_factory_md → factory_init → redetect
     """
     nodes: dict[str, Any] = {}
-    edges: list[Edge] = []
 
     nodes["discover"] = FnNode(
         id="discover",
@@ -1575,17 +1587,23 @@ def discover_workflow() -> Workflow:
         reads={".factory/eval_profile.json", "eval/score.py"},
     )
 
+    # Bootstrap subgraph: complete factory setup after discover approval
+    b_nodes, b_edges = _bootstrap_subgraph()
+    nodes.update(b_nodes)
+
     nodes["redetect"] = FnNode(
         id="redetect",
         command="factory detect {project_path}",
-        notes="Re-detect project state after discovery to transition out of no_factory state.",
-        reads={".factory/eval_profile.json"},
+        notes="Re-detect project state after bootstrap to transition out of no_factory state.",
+        reads={".factory/config.json"},
     )
 
     edges = [
         Edge(source="discover", target="gate_discover"),
-        Edge(source="gate_discover", target="redetect", condition=VerdictType.PROCEED),
+        Edge(source="gate_discover", target="eval_test", condition=VerdictType.PROCEED),
         Edge(source="gate_discover", target="discover", condition=VerdictType.RELOOP),
+        *b_edges,
+        Edge(source="factory_init", target="redetect"),
     ]
 
     def trigger(state: ProjectState, ctx: dict[str, Any]) -> bool:

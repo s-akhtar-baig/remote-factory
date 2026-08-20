@@ -260,6 +260,25 @@ def _sync_backlog_to_main(worktree_path: Path, project_path: Path) -> None:
         log.info("backlog_synced", src=str(wt_backlog), dst=str(main_backlog))
 
 
+_BOOTSTRAP_ARTIFACTS: Final[tuple[tuple[str, str], ...]] = (
+    ("factory.md", "factory.md"),
+    (".factory/config.json", ".factory/config.json"),
+    (".factory/eval_profile.json", ".factory/eval_profile.json"),
+    ("eval/score.py", "eval/score.py"),
+)
+
+
+def _sync_bootstrap_to_main(worktree_path: Path, project_path: Path) -> None:
+    """Sync bootstrap artifacts from worktree back to main project."""
+    for wt_rel, main_rel in _BOOTSTRAP_ARTIFACTS:
+        src = worktree_path / wt_rel
+        if src.exists() and not src.is_symlink():
+            dst = project_path / main_rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            log.info("bootstrap_synced", file=main_rel, src=str(src), dst=str(dst))
+
+
 def _preserve_telemetry(worktree_path: Path, project_path: Path) -> None:
     """Copy telemetry files from worktree .factory/ to main project .factory/."""
     wt_factory = worktree_path / ".factory"
@@ -363,6 +382,7 @@ def remove_worktree(project_path: Path, worktree_path: Path, branch: str) -> Non
                 file=sys.stderr,
             )
             return
+        _sync_bootstrap_to_main(worktree_path, project_path)
         _sync_backlog_to_main(worktree_path, project_path)
         _preserve_telemetry(worktree_path, project_path)
         shutil.rmtree(worktree_path)
