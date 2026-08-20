@@ -16,7 +16,6 @@ from factory.workflow.definitions import (
     build_workflow,
     create_workflow,
     design_workflow,
-    discover_workflow,
     doc_generate_workflow,
     doc_update_workflow,
     founder_workflow,
@@ -1107,42 +1106,6 @@ class TestStudySubgraphFocus:
     def test_graph_explorer_prompt_without_focus(self) -> None:
         assert _graph_explorer_prompt() == _GRAPH_EXPLORER_PROMPT
         assert _graph_explorer_prompt(None) == _GRAPH_EXPLORER_PROMPT
-
-
-# ── Discover bootstrap tests ─────────────────────────────────
-
-
-class TestDiscoverBootstrap:
-    def test_discover_has_bootstrap(self) -> None:
-        """Discover workflow includes bootstrap nodes after gate_discover."""
-        wf = discover_workflow()
-        bootstrap_nodes = {"eval_test", "gate_eval", "mark_reviewed", "create_factory_md", "factory_init"}
-        for node_id in bootstrap_nodes:
-            assert node_id in wf.nodes, f"discover workflow missing bootstrap node '{node_id}'"
-
-    def test_discover_bootstrap_edge_wiring(self) -> None:
-        """gate_discover PROCEED routes to eval_test (bootstrap entry)."""
-        wf = discover_workflow()
-        assert any(
-            e.source == "gate_discover"
-            and e.target == "eval_test"
-            and e.condition == VerdictType.PROCEED
-            for e in wf.edges
-        )
-
-    def test_discover_bootstrap_exit(self) -> None:
-        """factory_init routes to redetect (bootstrap exit)."""
-        wf = discover_workflow()
-        assert any(
-            e.source == "factory_init" and e.target == "redetect"
-            for e in wf.edges
-        )
-
-    def test_discover_valid(self) -> None:
-        """Discover workflow passes validation with bootstrap nodes."""
-        wf = discover_workflow()
-        issues = wf.validate_graph()
-        assert issues == [], f"discover workflow has issues: {issues}"
 
 
 # ── Bootstrap subgraph tests ─────────────────────────────────

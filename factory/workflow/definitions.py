@@ -1557,10 +1557,9 @@ def meta_workflow() -> Workflow:
 
 
 def discover_workflow() -> Workflow:
-    """W₆: Discover Mode — auto-discover eval dimensions, bootstrap, and re-detect.
+    """W₆: Discover Mode — auto-discover eval dimensions and generate eval harness.
 
-    discover → gate_discover → eval_test → gate_eval → mark_reviewed →
-    create_factory_md → factory_init → redetect
+    factory discover → CEO verify → re-detect state
     """
     nodes: dict[str, Any] = {}
 
@@ -1587,23 +1586,17 @@ def discover_workflow() -> Workflow:
         reads={".factory/eval_profile.json", "eval/score.py"},
     )
 
-    # Bootstrap subgraph: complete factory setup after discover approval
-    b_nodes, b_edges = _bootstrap_subgraph()
-    nodes.update(b_nodes)
-
     nodes["redetect"] = FnNode(
         id="redetect",
         command="factory detect {project_path}",
-        notes="Re-detect project state after bootstrap to transition out of no_factory state.",
-        reads={".factory/config.json"},
+        notes="Re-detect project state after discovery to transition out of no_factory state.",
+        reads={".factory/eval_profile.json"},
     )
 
     edges = [
         Edge(source="discover", target="gate_discover"),
-        Edge(source="gate_discover", target="eval_test", condition=VerdictType.PROCEED),
+        Edge(source="gate_discover", target="redetect", condition=VerdictType.PROCEED),
         Edge(source="gate_discover", target="discover", condition=VerdictType.RELOOP),
-        *b_edges,
-        Edge(source="factory_init", target="redetect"),
     ]
 
     def trigger(state: ProjectState, ctx: dict[str, Any]) -> bool:
